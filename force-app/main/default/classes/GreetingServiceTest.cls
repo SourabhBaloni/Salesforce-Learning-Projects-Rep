@@ -12,14 +12,28 @@ private class GreetingServiceTest {
       GreetingService.greet(null),
       'Null name should return default greeting'
     );
+    System.assertEquals(
+      'Hello, World!',
+      GreetingService.greet('   '),
+      'Whitespace-only name should return default greeting'
+    );
   }
 
   @isTest
-  static void returnsNamedGreeting() {
+  static void returnsNamedGreetingTrimmed() {
     System.assertEquals(
       'Hello, Sourabh!',
-      GreetingService.greet('Sourabh'),
-      'Named greeting should include the name'
+      GreetingService.greet('  Sourabh  '),
+      'Named greeting should be trimmed'
+    );
+  }
+
+  @isTest
+  static void greetLoudUppercasesGreeting() {
+    System.assertEquals(
+      'HELLO, SOURABH!',
+      GreetingService.greetLoud('Sourabh'),
+      'greetLoud should upper-case the greeting'
     );
   }
 }

@@ -22,4 +22,13 @@ describe("c-greeting-card", () => {
     const div = element.shadowRoot.querySelector(".greeting");
     expect(div.textContent).toBe("Hello, Sourabh!");
   });
+
+  it("upper-cases the greeting when uppercase is true", () => {
+    const element = createElement("c-greeting-card", { is: GreetingCard });
+    element.name = "Sourabh";
+    element.uppercase = true;
+    document.body.appendChild(element);
+    const div = element.shadowRoot.querySelector(".greeting");
+    expect(div.textContent).toBe("HELLO, SOURABH!");
+  });
 });
