@@ -47,7 +47,7 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
-          node-version: "20"
+          node-version: "22"
           cache: "npm"
       - run: npm ci
       - name: Prettier check
@@ -71,9 +71,8 @@ jobs:
       - name: Setup SFDX + Auth
         uses: ./.github/actions/setup-sfdx
         with:
-          consumer-key: ${{ secrets.SF_CONSUMER_KEY }}
-          jwt-key: ${{ secrets.SF_JWT_SERVER_KEY }}
-          username: ${{ secrets.SF_USERNAME }}
+          client-id: ${{ secrets.SF_CLIENT_ID }}
+          client-secret: ${{ secrets.SF_CLIENT_SECRET }}
           instance-url: ${{ secrets.SF_INSTANCE_URL }}
           alias: ${{ needs.resolve-env.outputs.environment }}
 
