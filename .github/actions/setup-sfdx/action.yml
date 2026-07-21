@@ -1,0 +1,62 @@
+name: "Setup SFDX + Auth"
+description: "Installs Node deps, Salesforce CLI, sfdx-git-delta, and authenticates to the target org via JWT."
+
+inputs:
+  consumer-key:
+    description: "Connected App consumer key (client id)"
+    required: true
+  jwt-key:
+    description: "Contents of the JWT private key (server.key)"
+    required: true
+  username:
+    description: "Integration user username for the target org"
+    required: true
+  instance-url:
+    description: "Login URL (https://test.salesforce.com for sandbox, https://login.salesforce.com for production)"
+    required: true
+    default: "https://test.salesforce.com"
+  alias:
+    description: "Alias to assign to the authenticated org"
+    required: false
+    default: "targetOrg"
+
+runs:
+  using: "composite"
+  steps:
+    - name: Setup Node
+      uses: actions/setup-node@v4
+      with:
+        node-version: "20"
+        cache: "npm"
+
+    - name: Install npm dependencies
+      shell: bash
+      run: npm ci
+
+    - name: Install Salesforce CLI + sfdx-git-delta
+      shell: bash
+      run: |
+        npm install --global @salesforce/cli@latest
+        echo "y" | sf plugins install sfdx-git-delta
+        sf version --verbose --json
+
+    - name: Write JWT key to file
+      shell: bash
+      run: |
+        echo "${{ inputs.jwt-key }}" > "${RUNNER_TEMP}/server.key"
+
+    - name: Authenticate via JWT
+      shell: bash
+      run: |
+        sf org login jwt \
+          --client-id "${{ inputs.consumer-key }}" \
+          --jwt-key-file "${RUNNER_TEMP}/server.key" \
+          --username "${{ inputs.username }}" \
+          --instance-url "${{ inputs.instance-url }}" \
+          --alias "${{ inputs.alias }}" \
+          --set-default
+
+    - name: Cleanup key
+      if: always()
+      shell: bash
+      run: rm -f "${RUNNER_TEMP}/server.key"

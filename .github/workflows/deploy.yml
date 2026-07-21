@@ -1,0 +1,95 @@
+name: Deploy
+
+# Runs on merge/push into a protected branch. Deploys ONLY the changed
+# metadata (delta) to the org that maps to that branch:
+#   qa      -> qa environment
+#   uat     -> uat environment
+#   preprod -> preprod environment
+#   main    -> production environment
+#
+# Direct pushes are blocked by branch protection, so in practice this runs
+# after a reviewed + validated PR is merged.
+on:
+  push:
+    branches: [main, preprod, uat, qa]
+    paths:
+      - "force-app/**"
+      - "manifest/**"
+
+concurrency:
+  group: deploy-${{ github.ref_name }}
+  cancel-in-progress: false
+
+jobs:
+  resolve-env:
+    name: Resolve target environment
+    runs-on: ubuntu-latest
+    outputs:
+      environment: ${{ steps.map.outputs.environment }}
+    steps:
+      - id: map
+        shell: bash
+        run: |
+          case "${{ github.ref_name }}" in
+            qa)      echo "environment=qa"         >> "$GITHUB_OUTPUT" ;;
+            uat)     echo "environment=uat"        >> "$GITHUB_OUTPUT" ;;
+            preprod) echo "environment=preprod"    >> "$GITHUB_OUTPUT" ;;
+            main)    echo "environment=production" >> "$GITHUB_OUTPUT" ;;
+            *)       echo "environment=qa"         >> "$GITHUB_OUTPUT" ;;
+          esac
+          echo "Deploy branch: ${{ github.ref_name }}"
+
+  deploy:
+    name: Delta Deploy
+    runs-on: ubuntu-latest
+    needs: resolve-env
+    environment: ${{ needs.resolve-env.outputs.environment }}
+    steps:
+      - name: Checkout (full history for delta)
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Setup SFDX + Auth
+        uses: ./.github/actions/setup-sfdx
+        with:
+          consumer-key: ${{ secrets.SF_CONSUMER_KEY }}
+          jwt-key: ${{ secrets.SF_JWT_SERVER_KEY }}
+          username: ${{ secrets.SF_USERNAME }}
+          instance-url: ${{ secrets.SF_INSTANCE_URL }}
+          alias: ${{ needs.resolve-env.outputs.environment }}
+
+      - name: Generate delta package
+        run: |
+          mkdir -p delta
+          sf sgd source delta \
+            --to "HEAD" \
+            --from "HEAD~1" \
+            --output-dir delta \
+            --generate-delta \
+            --source-dir force-app
+          echo "----- Delta package.xml -----"
+          cat delta/package/package.xml || true
+
+      - name: Deploy delta
+        run: |
+          if grep -q "<types>" delta/package/package.xml; then
+            sf project deploy start \
+              --manifest delta/package/package.xml \
+              --test-level RunLocalTests \
+              --wait 60 \
+              --verbose
+          else
+            echo "No deployable metadata changes detected. Skipping deploy."
+          fi
+
+      - name: Deploy destructive changes (if any)
+        run: |
+          if [ -f delta/destructiveChanges/destructiveChanges.xml ] && grep -q "<types>" delta/destructiveChanges/destructiveChanges.xml; then
+            sf project deploy start \
+              --metadata-dir delta/destructiveChanges \
+              --post-destructive-changes delta/destructiveChanges/destructiveChanges.xml \
+              --wait 60 || echo "No destructive changes applied."
+          else
+            echo "No destructive changes."
+          fi

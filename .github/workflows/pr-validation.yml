@@ -1,0 +1,104 @@
+name: PR Validation
+
+# Runs on every PR into a protected branch (qa / uat / preprod / main).
+# Quality gates + a CHECK-ONLY validation of the changed metadata against the
+# environment that maps to the PR's TARGET branch. Nothing is deployed here.
+#
+# This workflow is the required "validation build". Branch protection is
+# configured so a PR cannot be merged until the "Check-only Validation" job
+# passes AND a reviewer approves.
+on:
+  pull_request:
+    branches: [main, preprod, uat, qa]
+    paths:
+      - "force-app/**"
+      - "manifest/**"
+      - ".github/**"
+      - "package.json"
+
+# Cancel superseded runs on the same PR
+concurrency:
+  group: pr-validation-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  resolve-env:
+    name: Resolve target environment
+    runs-on: ubuntu-latest
+    outputs:
+      environment: ${{ steps.map.outputs.environment }}
+    steps:
+      - id: map
+        shell: bash
+        run: |
+          case "${{ github.base_ref }}" in
+            qa)      echo "environment=qa"         >> "$GITHUB_OUTPUT" ;;
+            uat)     echo "environment=uat"        >> "$GITHUB_OUTPUT" ;;
+            preprod) echo "environment=preprod"    >> "$GITHUB_OUTPUT" ;;
+            main)    echo "environment=production" >> "$GITHUB_OUTPUT" ;;
+            *)       echo "environment=qa"         >> "$GITHUB_OUTPUT" ;;
+          esac
+          echo "PR target branch: ${{ github.base_ref }}"
+
+  quality:
+    name: Lint, Format & Jest
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: "npm"
+      - run: npm ci
+      - name: Prettier check
+        run: npm run prettier:verify
+      - name: ESLint
+        run: npm run lint
+      - name: LWC Jest (with coverage)
+        run: npm run test:unit:coverage
+
+  validate:
+    name: Check-only Validation
+    runs-on: ubuntu-latest
+    needs: [resolve-env, quality]
+    environment: ${{ needs.resolve-env.outputs.environment }}
+    steps:
+      - name: Checkout (full history for delta)
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Setup SFDX + Auth
+        uses: ./.github/actions/setup-sfdx
+        with:
+          consumer-key: ${{ secrets.SF_CONSUMER_KEY }}
+          jwt-key: ${{ secrets.SF_JWT_SERVER_KEY }}
+          username: ${{ secrets.SF_USERNAME }}
+          instance-url: ${{ secrets.SF_INSTANCE_URL }}
+          alias: ${{ needs.resolve-env.outputs.environment }}
+
+      - name: Generate delta package
+        run: |
+          mkdir -p delta
+          sf sgd source delta \
+            --to "HEAD" \
+            --from "origin/${{ github.base_ref }}" \
+            --output-dir delta \
+            --generate-delta \
+            --source-dir force-app
+          echo "----- Delta package.xml -----"
+          cat delta/package/package.xml || true
+          echo "----- Delta destructiveChanges.xml -----"
+          cat delta/destructiveChanges/destructiveChanges.xml || true
+
+      - name: Check-only deploy (validate)
+        run: |
+          if grep -q "<types>" delta/package/package.xml; then
+            sf project deploy validate \
+              --manifest delta/package/package.xml \
+              --test-level RunLocalTests \
+              --wait 60 \
+              --verbose
+          else
+            echo "No deployable metadata changes detected. Skipping validation."
+          fi
