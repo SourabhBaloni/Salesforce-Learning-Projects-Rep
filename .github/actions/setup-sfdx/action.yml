@@ -1,20 +1,16 @@
-name: "Setup SFDX + Auth"
-description: "Installs Node deps, Salesforce CLI, sfdx-git-delta, and authenticates to the target org via JWT."
+name: "Setup SFDX + Auth (Client Credentials)"
+description: "Installs Node deps, Salesforce CLI, sfdx-git-delta, and authenticates to the target org via the OAuth 2.0 Client Credentials flow."
 
 inputs:
-  consumer-key:
-    description: "Connected App consumer key (client id)"
+  client-id:
+    description: "External Client App / Connected App Consumer Key (client_id)"
     required: true
-  jwt-key:
-    description: "Contents of the JWT private key (server.key)"
-    required: true
-  username:
-    description: "Integration user username for the target org"
+  client-secret:
+    description: "External Client App / Connected App Consumer Secret (client_secret)"
     required: true
   instance-url:
-    description: "Login URL (https://test.salesforce.com for sandbox, https://login.salesforce.com for production)"
+    description: "Org My Domain URL, e.g. https://mydomain.my.salesforce.com (NOT login/test.salesforce.com)"
     required: true
-    default: "https://test.salesforce.com"
   alias:
     description: "Alias to assign to the authenticated org"
     required: false
@@ -40,23 +36,40 @@ runs:
         echo "y" | sf plugins install sfdx-git-delta
         sf version --verbose --json
 
-    - name: Write JWT key to file
+    - name: Authenticate via Client Credentials
       shell: bash
+      env:
+        CC_CLIENT_ID: ${{ inputs.client-id }}
+        CC_CLIENT_SECRET: ${{ inputs.client-secret }}
+        CC_INSTANCE_URL: ${{ inputs.instance-url }}
+        CC_ALIAS: ${{ inputs.alias }}
       run: |
-        echo "${{ inputs.jwt-key }}" > "${RUNNER_TEMP}/server.key"
+        set -euo pipefail
+        BASE="${CC_INSTANCE_URL%/}"
+        echo "Requesting access token from ${BASE}/services/oauth2/token ..."
+        RESP="$(curl -s -S -X POST "${BASE}/services/oauth2/token" \
+          --data-urlencode "grant_type=client_credentials" \
+          --data-urlencode "client_id=${CC_CLIENT_ID}" \
+          --data-urlencode "client_secret=${CC_CLIENT_SECRET}")"
 
-    - name: Authenticate via JWT
-      shell: bash
-      run: |
-        sf org login jwt \
-          --client-id "${{ inputs.consumer-key }}" \
-          --jwt-key-file "${RUNNER_TEMP}/server.key" \
-          --username "${{ inputs.username }}" \
-          --instance-url "${{ inputs.instance-url }}" \
-          --alias "${{ inputs.alias }}" \
-          --set-default
+        ACCESS_TOKEN="$(echo "$RESP" | jq -r '.access_token // empty')"
+        RESP_INSTANCE="$(echo "$RESP" | jq -r '.instance_url // empty')"
 
-    - name: Cleanup key
-      if: always()
-      shell: bash
-      run: rm -f "${RUNNER_TEMP}/server.key"
+        if [ -z "$ACCESS_TOKEN" ]; then
+          echo "::error::Client Credentials authentication failed."
+          echo "$RESP" | jq -r 'if .error then "error=\(.error) description=\(.error_description)" else . end' || echo "$RESP"
+          exit 1
+        fi
+
+        : "${RESP_INSTANCE:=$BASE}"
+        echo "Authenticated. Instance: ${RESP_INSTANCE}"
+
+        # sf org login access-token reads the token from SF_ACCESS_TOKEN.
+        export SF_ACCESS_TOKEN="$ACCESS_TOKEN"
+        sf org login access-token \
+          --instance-url "$RESP_INSTANCE" \
+          --alias "$CC_ALIAS" \
+          --set-default \
+          --no-prompt
+
+        sf org display --target-org "$CC_ALIAS"

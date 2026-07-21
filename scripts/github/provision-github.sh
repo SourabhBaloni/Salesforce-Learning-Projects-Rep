@@ -39,13 +39,9 @@ for e in "${ENVIRONMENTS[@]}"; do
   gh api -X PUT "repos/${OWNER}/${REPO_NAME}/environments/${e}" >/dev/null
 done
 
-# 4) Seed the login-URL secret per environment (safe, non-sensitive).
-#    The 3 real org secrets (SF_CONSUMER_KEY, SF_JWT_SERVER_KEY, SF_USERNAME)
-#    are added later — see scripts/github/set-org-secrets.sh
-for e in qa uat preprod; do
-  gh secret set SF_INSTANCE_URL --env "${e}" --repo "${OWNER}/${REPO_NAME}" --body "https://test.salesforce.com"
-done
-gh secret set SF_INSTANCE_URL --env production --repo "${OWNER}/${REPO_NAME}" --body "https://login.salesforce.com"
+# 4) Org secrets (SF_CLIENT_ID, SF_CLIENT_SECRET, SF_INSTANCE_URL) are added per
+#    environment later via scripts/github/set-org-secrets.sh — SF_INSTANCE_URL must be
+#    the org My Domain (Client Credentials does not work against login/test hosts).
 
 # 5) Apply the branch-protection ruleset (no direct commits, required checks, required review).
 echo "==> Applying branch-protection ruleset ..."
