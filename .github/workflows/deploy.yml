@@ -85,10 +85,21 @@ jobs:
       - name: Deploy destructive changes (if any)
         run: |
           if [ -f delta/destructiveChanges/destructiveChanges.xml ] && grep -q "<types>" delta/destructiveChanges/destructiveChanges.xml; then
+            echo "----- Removing the following metadata from the org -----"
+            cat delta/destructiveChanges/destructiveChanges.xml
+            # sfdx-git-delta emits an (empty) package.xml alongside the destructive
+            # manifest; create one as a fallback if it is missing.
+            if [ ! -f delta/destructiveChanges/package.xml ]; then
+              printf '%s\n' \
+                '<?xml version="1.0" encoding="UTF-8"?>' \
+                '<Package xmlns="http://soap.sforce.com/2006/04/metadata"><version>62.0</version></Package>' \
+                > delta/destructiveChanges/package.xml
+            fi
             sf project deploy start \
-              --metadata-dir delta/destructiveChanges \
+              --manifest delta/destructiveChanges/package.xml \
               --post-destructive-changes delta/destructiveChanges/destructiveChanges.xml \
-              --wait 60 || echo "No destructive changes applied."
+              --wait 60 \
+              --verbose
           else
             echo "No destructive changes."
           fi
